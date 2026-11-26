@@ -1,0 +1,44 @@
+# --- Secrets and Environment ---
+# Prevent actual credentials from being committed to the repository
+.env
+*.env
+secrets.env
+/etc/sms-xmpp-bridge/secrets.env
+
+# --- Python ---
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual Environments
+venv/
+.venv/
+env/
+ENV/
+
+# Distribution / packaging
+dist/
+build/
+*.egg-info/
+
+# --- Editors & OS ---
+# Zed Editor
+.zed/
+
+# JetBrains (PyCharm)
+.idea/
+
+# VS Code
+.vscode/
+*.code-workspace
+
+# macOS
+.DS_Store
+
+# Windows
+Thumbs.db
+desktop.ini
+
+# --- Logs ---
+*.log
