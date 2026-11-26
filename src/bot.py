@@ -239,9 +239,8 @@ class SMSBridgeBot(ClientXMPP):
     async def _sticky_expiry_worker(self):
         try:
             await asyncio.sleep(STICKY_TIMEOUT_SECONDS)
-            active = self._prune_recent_senders()
-            if active:
-                senders_str = ", ".join(active.keys())
+            if self.recent_senders:
+                senders_str = ", ".join(self.recent_senders.keys())
                 self.recent_senders.clear()
                 self.sticky_timer_task = None
                 self.send_message(
@@ -284,7 +283,7 @@ class SMSBridgeBot(ClientXMPP):
 
     def _check_hourly_rate_limit(self) -> bool:
         now = time.monotonic()
-        while self.sent_timestamps and (now - self.sent_timestamps) >= 3600:
+        while self.sent_timestamps and (now - self.sent_timestamps[0]) >= 3600:
             self.sent_timestamps.popleft()
         return len(self.sent_timestamps) < MAX_SMS_PER_HOUR
 
