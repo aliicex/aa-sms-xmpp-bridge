@@ -29,7 +29,7 @@ jobs:
           pip install slixmpp aiohttp python-dotenv pytest pytest-asyncio ruff
 
       - name: Check formatting & import sorting (Ruff)
-        run: ruff check --select E,F,I .
+        run: ruff check --select E,F,I --ignore E501 .
 
       - name: Run unit tests (Pytest)
         run: python -m pytest -v

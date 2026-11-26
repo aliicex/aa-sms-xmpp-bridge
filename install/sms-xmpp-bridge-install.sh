@@ -10,7 +10,7 @@ update_os
 
 msg_info "Installing Cloudflared"
 CF_PKG_HOST="pkg.cloudflare.com"
-mkdir -p --mode=0755 /usr/share/keyrings
+mkdir -p /usr/share/keyrings && chmod 0755 /usr/share/keyrings
 curl -fsSL "https://${CF_PKG_HOST}/cloudflare-main.gpg" | tee /usr/share/keyrings/cloudflare-main.gpg >/dev/null
 echo "deb [signed-by=/usr/share/keyrings/cloudflare-main.gpg] https://${CF_PKG_HOST}/cloudflared any main" >/etc/apt/sources.list.d/cloudflared.list
 $STD apt-get update
@@ -22,7 +22,7 @@ fetch_and_deploy_gh_release "sms-xmpp-bridge" "aliicex/aa-sms-xmpp-bridge" "tarb
 PYTHON_VERSION="3.12" setup_uv
 
 msg_info "Setting up Python Environment"
-cd /opt/sms-xmpp-bridge
+cd /opt/sms-xmpp-bridge || exit
 $STD uv venv .venv
 $STD uv pip install --python .venv/bin/python slixmpp aiohttp python-dotenv
 msg_ok "Set up Python Environment"

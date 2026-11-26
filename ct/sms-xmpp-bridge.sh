@@ -34,7 +34,7 @@ function update_script() {
     CLEAN_INSTALL=1 fetch_and_deploy_gh_release "sms-xmpp-bridge" "aliicex/aa-sms-xmpp-bridge" "tarball"
 
     msg_info "Updating Dependencies"
-    cd /opt/sms-xmpp-bridge
+    cd /opt/sms-xmpp-bridge || exit
     $STD uv venv --clear .venv
     $STD uv pip install --python .venv/bin/python slixmpp aiohttp python-dotenv
     msg_ok "Updated Dependencies"

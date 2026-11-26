@@ -13,7 +13,7 @@ This project provides a Community Script for Proxmox VE that deploys a lightweig
 
 Because `cloudflared` runs inside the container, you do **not** need to open or port-forward any ports on your router.
 
-1. Log into the [Cloudflare Zero Trust Dashboard](https://cloudflare.com "Cloudflare Zero Trust Dashboard") and go to **Networks** -> **Tunnels**.
+1. Log into the [Cloudflare Zero Trust Dashboard](https://dash.cloudflare.com "Cloudflare Zero Trust Dashboard") and go to **Networks** -> **Tunnels**.
 2. Click **Create a tunnel**, choose **Cloudflared**, and give it a name (e.g., `sms-xmpp-bridge`).
 3. Copy the **connector token** (`eyJhIjo...`) shown on the installation page—you will paste this during the Proxmox script installation.
 4. Open the **Public Hostname** tab for the tunnel and add a route:
@@ -23,7 +23,7 @@ Because `cloudflared` runs inside the container, you do **not** need to open or 
    - **Service Type:** `HTTP`
    - **URL:** `localhost:8080`
 
-*(Note: Ensure you do **not** place a Cloudflare Access authentication policy on `://yourdomain.com`, as AAISP's automated webhook POST requests cannot complete an interactive login.)*
+*(Note: Ensure you do **not** place a Cloudflare Access authentication policy on `https://sms.yourdomain.com/webhook`, as AAISP's automated webhook POST requests cannot complete an interactive login.)*
 
 ## 2. Installation via Proxmox
 
@@ -66,11 +66,11 @@ journalctl -u sms-xmpp-bridge -f
 
 ## 4. Setup in AAISP Control Panel
 
-Log into your [AAISP Control Pages](https://aa.net.uk "Andrews & Arnold Control Pages") and open the VoIP settings for your number:
+Log into your [AAISP Control Pages](https://control.aa.net.uk/ "Andrews & Arnold Control Pages") and open the VoIP settings for your number:
 
 1. **Inbound SMS Target:** Set the webhook URL to:
    ```text
-   https://://yourdomain.com?token=YOUR_WEBHOOK_TOKEN
+   https://sms.yourdomain.com/webhook?token=YOUR_WEBHOOK_TOKEN
    ```
    *(Use the `WEBHOOK_TOKEN` value from `/etc/sms-xmpp-bridge/secrets.env`.)*
 2. **Recommended Spend Limit:** Configure a monthly outbound call/SMS spend cap on the number as an account-level backstop in addition to the bot's built-in rate and segment limits.
