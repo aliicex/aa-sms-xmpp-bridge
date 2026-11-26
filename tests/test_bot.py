@@ -373,7 +373,7 @@ async def test_send_sms_api_success_sends_receipt():
     await bot.send_sms("+447700900000", "Test Message", orig_msg)
 
     args, kwargs = bot.http_session.post.call_args
-    assert "sms.aa.net.uk/sms.cgi" in args
+    assert "sms.aa.net.uk/sms.cgi" in args[0]
     assert kwargs["data"]["da"] == "+447700900000"
     assert kwargs["data"]["ud"] == "Test Message"
     assert orig_msg.reply_text == "✓ Sent to +447700900000"
