@@ -8,7 +8,6 @@ import signal
 import sys
 import time
 import sqlite3
-from collections import deque
 from dataclasses import dataclass
 
 import aiohttp
@@ -25,16 +24,6 @@ AA_USERNAME = os.getenv('AA_USERNAME', '').strip()
 AA_PASSWORD = os.getenv('AA_PASSWORD', '').strip()
 WEBHOOK_TOKEN = os.getenv('WEBHOOK_TOKEN', '').strip()
 TARGET_USER_JID = os.getenv("TARGET_USER_JID", "").strip()
-
-if (
-    not TARGET_USER_JID
-    or "/" in TARGET_USER_JID
-    or "@" not in TARGET_USER_JID
-):
-    raise ValueError(
-        "TARGET_USER_JID must be a bare account JID, such as user@example.org"
-    )
-
 AA_API_URL = "https://sms.aa.net.uk/sms.cgi"
 
 STICKY_TIMEOUT_SECONDS = 15 * 60  # 15 minutes
@@ -200,6 +189,10 @@ def validate_config():
         logger.error(f"Missing required environment variables in secrets.env: {', '.join(missing)}")
         sys.exit(1)
 
+    if "/" in TARGET_USER_JID or "@" not in TARGET_USER_JID:
+            logger.error("TARGET_USER_JID must be a bare account JID, such as user@example.org")
+            sys.exit(1)
+
 
 class SMSBridgeBot(ClientXMPP):
     def __init__(self, jid, password):
@@ -216,7 +209,6 @@ class SMSBridgeBot(ClientXMPP):
         self.recent_senders: dict[str, float] = {}
         self.sticky_timer_task: asyncio.Task | None = None
         self.pending_sms: PendingSMS | None = None
-        self.sent_timestamps: deque[float] = deque()
 
         self._init_rate_db()
 
@@ -256,6 +248,14 @@ class SMSBridgeBot(ClientXMPP):
             self.sticky_timer_task = loop.create_task(self._sticky_expiry_worker())
         except RuntimeError:
             self.sticky_timer_task = None
+
+    def _log_task_exception(self, task: asyncio.Task) -> None:
+        if task.cancelled():
+            return
+        exc = task.exception()
+        if exc is not None:
+            logger.error("Unhandled exception in background SMS task", exc_info=exc)
+
 
     def _init_rate_db(self) -> None:
         db_dir = os.path.dirname(RATE_DB_PATH)
@@ -353,11 +353,15 @@ class SMSBridgeBot(ClientXMPP):
         }
         return self.recent_senders
 
-    def _check_hourly_rate_limit(self) -> bool:
-        now = time.monotonic()
-        while self.sent_timestamps and (now - self.sent_timestamps[0]) >= 3600:
-            self.sent_timestamps.popleft()
-        return len(self.sent_timestamps) < MAX_SMS_PER_HOUR
+    def _has_available_hourly_slot(self) -> bool:
+        cutoff = time.time() - 3600
+        with sqlite3.connect(RATE_DB_PATH, timeout=5) as conn:
+            count = conn.execute(
+                "SELECT COUNT(*) FROM sms_rate_slots WHERE reserved_at > ?",
+                (cutoff,),
+            ).fetchone()[0]
+        return count < MAX_SMS_PER_HOUR
+
 
     def record_inbound_sender(self, sender: str) -> tuple[bool, list[str], str]:
         normalized, err = normalize_uk_number(sender)
@@ -459,7 +463,7 @@ class SMSBridgeBot(ClientXMPP):
                     self.recent_senders[pending.number] = time.monotonic()
                     self._schedule_sticky_expiry()
 
-                asyncio.create_task(
+                task = asyncio.create_task(
                     self.send_sms(
                         pending.number,
                         pending.text,
@@ -467,6 +471,7 @@ class SMSBridgeBot(ClientXMPP):
                         reservation_id=reservation_id,
                     )
                 )
+                task.add_done_callback(self._log_task_exception)
                 return
 
             elif lower_body in ("n", "no", "cancel"):
@@ -510,7 +515,7 @@ class SMSBridgeBot(ClientXMPP):
             return
 
         # 3. Bill protection: calculate SMS segments, cost, and enforce hard limits
-        if not self._check_hourly_rate_limit():
+        if not self._has_available_hourly_slot():
             msg.reply(
                 f"🛑 Hourly rate limit reached ({MAX_SMS_PER_HOUR} SMS/hour). "
                 f"Message blocked to protect your balance."
@@ -550,18 +555,25 @@ class SMSBridgeBot(ClientXMPP):
             f"Reply y to confirm or n to cancel (expires in {CONFIRM_TIMEOUT_SECONDS}s)."
         ).send()
 
-    async def send_sms(
+async def send_sms(
         self,
         number: str,
         text: str,
         orig_msg,
         reservation_id: int | None = None,
     ):
+        if self.http_session is None:
+            logger.error("HTTP session not initialized; cannot send SMS")
+            orig_msg.reply(f"Error sending SMS to {number}: HTTP client unavailable.").send()
+            if reservation_id is not None:
+                self._finish_hourly_slot(reservation_id=reservation_id, sent=False)
+            return
+
         payload = {
             'username': AA_USERNAME,
             'password': AA_PASSWORD,
             'da': number,
-            'ud': text
+            'ud': text,
         }
 
         success = False
@@ -572,11 +584,14 @@ class SMSBridgeBot(ClientXMPP):
                 resp_text = (await resp.text()).strip()
                 # AAISP returns HTTP 200 even on API errors, prefixing body with "ERR:"
                 if resp.status == 200 and not resp_text.upper().startswith("ERR"):
+                    success = True
                     logger.info("Outbound SMS dispatched successfully")
                     orig_msg.reply(f"✓ Sent to {number}").send()
                 else:
                     logger.error(f"AAISP rejected SMS (HTTP {resp.status}): {resp_text}")
-                    orig_msg.reply(f"Failed to send SMS to {number}: {resp_text or f'HTTP {resp.status}'}").send()
+                    orig_msg.reply(
+                        f"Failed to send SMS to {number}: {resp_text or f'HTTP {resp.status}'}"
+                    ).send()
         except Exception as e:
             outcome_unknown = True
             logger.error(f"Network error sending SMS: {e}")
@@ -584,10 +599,9 @@ class SMSBridgeBot(ClientXMPP):
         finally:
             if reservation_id is not None and not outcome_unknown:
                 self._finish_hourly_slot(
-                reservation_id=reservation_id,
-                sent=success,
+                    reservation_id=reservation_id,
+                    sent=success,
                 )
-
 
 async def handle_inbound_sms(request: web.Request) -> web.Response:
     token = request.query.get("token", "")
