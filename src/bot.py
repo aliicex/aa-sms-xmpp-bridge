@@ -5,9 +5,9 @@ import math
 import os
 import re
 import signal
+import sqlite3
 import sys
 import time
-import sqlite3
 from dataclasses import dataclass
 
 import aiohttp
