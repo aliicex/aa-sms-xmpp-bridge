@@ -17,12 +17,12 @@ Because `cloudflared` runs inside the container, you do not need to open or forw
 1. Sign in to the [Cloudflare Zero Trust Dashboard](https://dash.cloudflare.com "Cloudflare Zero Trust Dashboard") and go to **Networks** > **Tunnels**.
 2. Select **Create a tunnel**, choose **Cloudflared** and give the tunnel a name, such as `sms-xmpp-bridge`.
 3. Copy the connector token shown on the installation page. You will enter it when you install the Proxmox script.
-4. Open the tunnel's **Public Hostname** tab and add a route:
+4. Choose the **Publshed application** route type:
    - **Subdomain:** `sms`
    - **Domain:** `yourdomain.com`
    - **Path:** `webhook` (recommended, so that only `/webhook` is routed to the container)
    - **Service type:** `HTTP`
-   - **URL:** `localhost:8080`
+   - **URL:** `http://localhost:8080`
 
 Do not apply a Cloudflare Access authentication policy to `https://sms.yourdomain.com/webhook`. AAISP's automated webhook requests cannot complete an interactive login.
 
@@ -36,7 +36,7 @@ bash -c "$(curl -fsSL https://raw.githubusercontent.com/aliicex/aa-sms-xmpp-brid
 
 During installation:
 
-- A random `WEBHOOK_TOKEN` is generated and printed in the console.
+- A random `WEBHOOK_TOKEN` is generated and saved to `/etc/sms-xmpp-bridge/secrets.env`.
 - You will be asked for your Cloudflare Tunnel token. Press **Enter** to skip this step and run `cloudflared service install <TOKEN>` later.
 
 ## 3. Configure credentials
