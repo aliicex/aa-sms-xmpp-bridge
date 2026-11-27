@@ -135,3 +135,37 @@ update
 ## Testing
 
 A unit test suite is available in the `/tests` directory. See [`tests/README.md`](tests/README.md) for instructions on running it.
+
+## Checking the Service User and Logs
+
+Check which user and group systemd runs the bot as:
+
+```bash
+sudo systemctl show sms-xmpp-bridge.service -p User -p Group
+```
+
+If `User=` and `Group=` are blank, the system service runs as `root` by default. To see the full unit configuration, including any `User=` or `Group=` settings, run:
+
+```bash
+sudo systemctl cat sms-xmpp-bridge.service
+```
+
+Follow the bot’s logs in real time:
+
+```bash
+sudo journalctl -u sms-xmpp-bridge.service -f
+```
+
+Press **Ctrl+C** to stop following the logs. To view the most recent 100 entries instead:
+
+```bash
+sudo journalctl -u sms-xmpp-bridge.service -n 100 --no-pager
+```
+
+To show warnings and errors from the current boot:
+
+```bash
+sudo journalctl -u sms-xmpp-bridge.service -b -p warning --no-pager
+```
+
+**Security note:** Webhook request URLs may include the webhook token, and the HTTP access log can record those URLs. Redact tokens before sharing logs.
