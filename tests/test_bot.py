@@ -172,7 +172,7 @@ async def test_confirmation_timeout_notifies_and_clears_stickiness(monkeypatch):
     assert len(bot.recent_senders) == 0
 
     bot.send_message.assert_called_once()
-    sent_body = bot.send_message.call_args.kwargs["m_body"]
+    sent_body = bot.send_message.call_args.kwargs["mbody"]
     assert "Confirmation timed out" in sent_body
     assert "specify a recipient number" in sent_body
 
@@ -190,7 +190,7 @@ async def test_sticky_timeout_notifies_and_clears_stickiness(monkeypatch):
 
     assert len(bot.recent_senders) == 0
     bot.send_message.assert_called_once()
-    sent_body = bot.send_message.call_args.kwargs["m_body"]
+    sent_body = bot.send_message.call_args.kwargs["mbody"]
     assert "expired" in sent_body
     assert "specify a recipient number" in sent_body
 
@@ -424,9 +424,9 @@ async def test_webhook_inbound_valid_token():
     assert response.status == 200
     bot.send_message.assert_called_once()
     call_kwargs = bot.send_message.call_args.kwargs
-    assert call_kwargs["m_to"] == "owner@test.im"
-    assert "+447700900099" in call_kwargs["m_body"]
-    assert "Reply directly to send to +447700900099" in call_kwargs["m_body"]
+    assert call_kwargs["mto"] == "owner@test.im"
+    assert "+447700900099" in call_kwargs["mbody"]
+    assert "Reply directly to send to +447700900099" in call_kwargs["mbody"]
     bot._clear_stickiness()
 
 
