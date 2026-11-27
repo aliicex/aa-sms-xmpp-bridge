@@ -555,7 +555,7 @@ class SMSBridgeBot(ClientXMPP):
             f"Reply y to confirm or n to cancel (expires in {CONFIRM_TIMEOUT_SECONDS}s)."
         ).send()
 
-async def send_sms(
+    async def send_sms(
         self,
         number: str,
         text: str,
