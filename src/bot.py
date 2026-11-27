@@ -7,6 +7,7 @@ import re
 import signal
 import sys
 import time
+import sqlite3
 from collections import deque
 from dataclasses import dataclass
 
@@ -23,7 +24,17 @@ XMPP_PASSWORD = os.getenv('XMPP_PASSWORD', '').strip()
 AA_USERNAME = os.getenv('AA_USERNAME', '').strip()
 AA_PASSWORD = os.getenv('AA_PASSWORD', '').strip()
 WEBHOOK_TOKEN = os.getenv('WEBHOOK_TOKEN', '').strip()
-TARGET_USER_JID = os.getenv('TARGET_USER_JID', '').strip()
+TARGET_USER_JID = os.getenv("TARGET_USER_JID", "").strip()
+
+if (
+    not TARGET_USER_JID
+    or "/" in TARGET_USER_JID
+    or "@" not in TARGET_USER_JID
+):
+    raise ValueError(
+        "TARGET_USER_JID must be a bare account JID, such as user@example.org"
+    )
+
 AA_API_URL = "https://sms.aa.net.uk/sms.cgi"
 
 STICKY_TIMEOUT_SECONDS = 15 * 60  # 15 minutes
@@ -31,6 +42,11 @@ CONFIRM_TIMEOUT_SECONDS = 60      # 60 seconds to confirm outbound SMS
 MAX_SMS_PARTS = 4                 # Hard cap per outbound SMS
 MAX_SMS_PER_HOUR = 30             # Hourly outbound rate limit
 COST_PER_PART_PENCE = 3.6         # AAISP standard UK outbound SMS tariff
+RATE_DB_PATH = os.getenv(
+    "RATE_DB_PATH",
+    "/var/lib/sms-xmpp-bridge/rate-limit.sqlite3",
+)
+
 
 logging.basicConfig(
     level=logging.INFO,
@@ -82,9 +98,11 @@ def normalize_smart_punctuation(text: str) -> str:
 
 def calculate_sms_parts(text: str) -> tuple[int, bool]:
     """
-    Calculates SMS segment count and whether Unicode (UCS-2) encoding is triggered.
-    GSM-7: 160 chars for 1 part, 153 chars/part for multipart (extended chars count as 2).
-    UCS-2: 70 chars for 1 part, 67 chars/part for multipart.
+    Calculate SMS segment count and whether Unicode (UCS-2) encoding is triggered.
+
+    GSM-7: 160 units for one part, 153 units per part for multipart.
+    GSM-7 extended characters count as 2 units.
+    UCS-2: 70 units for one part, 67 units per part for multipart.
     """
     gsm_units = 0
     is_unicode = False
@@ -99,10 +117,11 @@ def calculate_sms_parts(text: str) -> tuple[int, bool]:
             break
 
     if is_unicode:
-        length = len(text)
-        if length <= 70:
+        # Count UTF-16 code units: many emoji count as 2, not 1.
+        unicode_units = len(text.encode("utf-16-be")) // 2
+        if unicode_units <= 70:
             return 1, True
-        return math.ceil(length / 67), True
+        return math.ceil(unicode_units / 67), True
 
     if gsm_units <= 160:
         return 1, False
@@ -199,6 +218,8 @@ class SMSBridgeBot(ClientXMPP):
         self.pending_sms: PendingSMS | None = None
         self.sent_timestamps: deque[float] = deque()
 
+        self._init_rate_db()
+
     async def start(self, event):
         self.send_presence()
         await self.get_roster()
@@ -235,6 +256,57 @@ class SMSBridgeBot(ClientXMPP):
             self.sticky_timer_task = loop.create_task(self._sticky_expiry_worker())
         except RuntimeError:
             self.sticky_timer_task = None
+
+    def _init_rate_db(self) -> None:
+        db_dir = os.path.dirname(RATE_DB_PATH)
+        if db_dir:
+            os.makedirs(db_dir, exist_ok=True)
+
+        with sqlite3.connect(RATE_DB_PATH, timeout=5) as conn:
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS sms_rate_slots (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    reserved_at REAL NOT NULL
+                )
+            """)
+
+
+    def _reserve_hourly_slot(self) -> int | None:
+        now = time.time()
+        cutoff = now - 3600
+
+        with sqlite3.connect(RATE_DB_PATH, timeout=5) as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            conn.execute(
+                "DELETE FROM sms_rate_slots WHERE reserved_at <= ?",
+                (cutoff,),
+            )
+
+            count = conn.execute(
+                "SELECT COUNT(*) FROM sms_rate_slots"
+            ).fetchone()[0]
+
+            if count >= MAX_SMS_PER_HOUR:
+                return None
+
+            cursor = conn.execute(
+                "INSERT INTO sms_rate_slots (reserved_at) VALUES (?)",
+                (now,),
+            )
+            return cursor.lastrowid
+
+
+    def _finish_hourly_slot(self, reservation_id: int, sent: bool) -> None:
+        with sqlite3.connect(RATE_DB_PATH, timeout=5) as conn:
+            if sent:
+                # Keep the slot for the rest of the rolling hour.
+                return
+
+            conn.execute(
+                "DELETE FROM sms_rate_slots WHERE id = ?",
+                (reservation_id,),
+            )
+
 
     async def _sticky_expiry_worker(self):
         try:
@@ -374,18 +446,29 @@ class SMSBridgeBot(ClientXMPP):
                     return
             elif lower_body in ("y", "yes"):
                 self._clear_pending_sms()
-                if not self._check_hourly_rate_limit():
+
+                reservation_id = self._reserve_hourly_slot()
+                if reservation_id is None:
                     msg.reply(
                         f"🛑 Hourly rate limit reached ({MAX_SMS_PER_HOUR} SMS/hour). "
-                        f"Please wait before sending more messages."
+                        "Please wait before sending more messages."
                     ).send()
                     return
+
                 if pending.number in self.recent_senders:
                     self.recent_senders[pending.number] = time.monotonic()
                     self._schedule_sticky_expiry()
-                self.sent_timestamps.append(time.monotonic())
-                asyncio.create_task(self.send_sms(pending.number, pending.text, msg))
+
+                asyncio.create_task(
+                    self.send_sms(
+                        pending.number,
+                        pending.text,
+                        msg,
+                        reservation_id=reservation_id,
+                    )
+                )
                 return
+
             elif lower_body in ("n", "no", "cancel"):
                 self._clear_pending_sms()
                 msg.reply("❌ Cancelled.").send()
@@ -467,13 +550,23 @@ class SMSBridgeBot(ClientXMPP):
             f"Reply y to confirm or n to cancel (expires in {CONFIRM_TIMEOUT_SECONDS}s)."
         ).send()
 
-    async def send_sms(self, number: str, text: str, orig_msg):
+    async def send_sms(
+        self,
+        number: str,
+        text: str,
+        orig_msg,
+        reservation_id: int | None = None,
+    ):
         payload = {
             'username': AA_USERNAME,
             'password': AA_PASSWORD,
             'da': number,
             'ud': text
         }
+
+        success = False
+        outcome_unknown = False
+
         try:
             async with self.http_session.post(AA_API_URL, data=payload, timeout=15) as resp:
                 resp_text = (await resp.text()).strip()
@@ -485,22 +578,53 @@ class SMSBridgeBot(ClientXMPP):
                     logger.error(f"AAISP rejected SMS (HTTP {resp.status}): {resp_text}")
                     orig_msg.reply(f"Failed to send SMS to {number}: {resp_text or f'HTTP {resp.status}'}").send()
         except Exception as e:
+            outcome_unknown = True
             logger.error(f"Network error sending SMS: {e}")
             orig_msg.reply(f"Error sending SMS to {number}: {e}").send()
+        finally:
+            if reservation_id is not None and not outcome_unknown:
+                self._finish_hourly_slot(
+                reservation_id=reservation_id,
+                sent=success,
+                )
 
 
 async def handle_inbound_sms(request: web.Request) -> web.Response:
-    token = request.query.get('token', '')
+    token = request.query.get("token", "")
     if not WEBHOOK_TOKEN or not hmac.compare_digest(token, WEBHOOK_TOKEN):
         logger.warning("Rejected unauthorized webhook request")
         return web.Response(status=403, text="Forbidden")
 
-    data = await request.post()
-    sender = data.get('oa', 'Unknown')
-    recipient = data.get('da', 'Unknown')
-    message = data.get('ud', '')
+    # AAISP's webhook is expected to submit form data.
+    if request.content_type not in {
+        "application/x-www-form-urlencoded",
+        "multipart/form-data",
+    }:
+        return web.Response(status=415, text="Unsupported Media Type")
 
-    bot: SMSBridgeBot = request.app['bot']
+    try:
+        data = await request.post()
+    except (ValueError, web.HTTPBadRequest):
+        return web.Response(status=400, text="Invalid form data")
+
+    sender = data.get("oa")
+    recipient = data.get("da")
+    message = data.get("ud")
+
+    # Require all three fields as strings, and reject implausibly large values.
+    if not all(isinstance(value, str) for value in (sender, recipient, message)):
+        return web.Response(status=400, text="Missing or invalid fields")
+
+    sender = sender.strip()
+    recipient = recipient.strip()
+
+    if not sender or not recipient or not message:
+        return web.Response(status=400, text="Missing or invalid fields")
+
+    if len(sender) > 64 or len(recipient) > 64 or len(message) > 4096:
+        return web.Response(status=400, text="Field too long")
+
+    bot: SMSBridgeBot = request.app["bot"]
     is_collision, active_senders, display_sender = bot.record_inbound_sender(sender)
 
     if is_collision:
@@ -521,10 +645,11 @@ async def handle_inbound_sms(request: web.Request) -> web.Response:
         f"{reply_hint}"
     )
 
-    bot.send_message(m_to=TARGET_USER_JID, m_body=formatted_msg, m_type='chat')
+    bot.send_message(m_to=TARGET_USER_JID, m_body=formatted_msg, m_type="chat")
     logger.info("Forwarded inbound SMS to XMPP")
 
     return web.Response(text="OK")
+
 
 
 async def main():
@@ -539,13 +664,13 @@ async def main():
     async with aiohttp.ClientSession() as session:
         bot.http_session = session
 
-        app = web.Application()
+        app = web.Application(client_max_size=16 * 1024)
         app['bot'] = bot
         app.router.add_post('/webhook', handle_inbound_sms)
 
         runner = web.AppRunner(app)
         await runner.setup()
-        site = web.TCPSite(runner, '0.0.0.0', 8080)
+        site = web.TCPSite(runner, '127.0.0.1', 8080)
         await site.start()
         logger.info("HTTP Webhook server started on port 8080")
 

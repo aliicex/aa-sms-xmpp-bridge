@@ -40,7 +40,7 @@ WEBHOOK_TOKEN=$WEBHOOK_TOKEN
 TARGET_USER_JID=
 EOF
 chmod 600 /etc/sms-xmpp-bridge/secrets.env
-msg_ok "Configured Secrets (Webhook Token: $WEBHOOK_TOKEN)"
+msg_ok "Configured Secrets"
 
 msg_info "Creating Service"
 cat <<EOF >/etc/systemd/system/sms-xmpp-bridge.service
