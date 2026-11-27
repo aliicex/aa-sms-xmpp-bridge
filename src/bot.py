@@ -316,12 +316,12 @@ class SMSBridgeBot(ClientXMPP):
                 self.recent_senders.clear()
                 self.sticky_timer_task = None
                 self.send_message(
-                    m_to=TARGET_USER_JID,
-                    m_body=(
+                    mto=TARGET_USER_JID,
+                    mbody=(
                         f"⌛ Reply session for {senders_str} expired after 15 minutes. "
                         f"Please specify a recipient number for your next message."
                     ),
-                    m_type='chat',
+                    mtype='chat',
                 )
         except asyncio.CancelledError:
             pass
@@ -333,13 +333,13 @@ class SMSBridgeBot(ClientXMPP):
                 self.pending_sms = None
                 self._clear_stickiness()
                 self.send_message(
-                    m_to=TARGET_USER_JID,
-                    m_body=(
+                    mto=TARGET_USER_JID,
+                    mbody=(
                         f"⏰ Confirmation timed out ({CONFIRM_TIMEOUT_SECONDS}s) — "
                         f"message to {pending.number} was not sent. "
                         f"Active reply session cleared; please specify a recipient number for your next message."
                     ),
-                    m_type='chat',
+                    mtype='chat',
                 )
         except asyncio.CancelledError:
             pass
@@ -659,7 +659,7 @@ async def handle_inbound_sms(request: web.Request) -> web.Response:
         f"{reply_hint}"
     )
 
-    bot.send_message(m_to=TARGET_USER_JID, m_body=formatted_msg, m_type="chat")
+    bot.send_message(mto=TARGET_USER_JID, mbody=formatted_msg, mtype="chat")
     logger.info("Forwarded inbound SMS to XMPP")
 
     return web.Response(text="OK")
