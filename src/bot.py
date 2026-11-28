@@ -230,7 +230,7 @@ class SMSBridgeBot(ClientXMPP):
 
         # 1. Help & Status commands
         if lower_body in ("help", "?"):
-            line_list = ", ".join(f"{l.alias} ({l.number})" for l in LINES.values()) or "none"
+            line_list = ", ".join(f"{l.alias} ({l.number})" for line in LINES.values()) or "none"
             self.send_reply(
                 sender_bare,
                 "Commands:\n"
@@ -248,7 +248,7 @@ class SMSBridgeBot(ClientXMPP):
                 self.send_reply(sender_bare, "No lines configured in secrets.env.")
                 return
             details = "\n".join(
-                f"• {l.alias}{' (default)' if l.alias == DEFAULT_LINE_ALIAS else ''}: {l.number}"
+                f"• {l.alias}{' (default)' if line.alias == DEFAULT_LINE_ALIAS else ''}: {l.number}"
                 for l in LINES.values()
             )
             self.send_reply(sender_bare, f"Configured lines:\n{details}")
