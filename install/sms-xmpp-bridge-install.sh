@@ -32,11 +32,31 @@ mkdir -p /etc/sms-xmpp-bridge
 chmod 700 /etc/sms-xmpp-bridge
 WEBHOOK_TOKEN=$(random_password 32)
 cat <<EOF >/etc/sms-xmpp-bridge/secrets.env
+# XMPP Bot Credentials
 XMPP_JID=
 XMPP_PASSWORD=
-AA_USERNAME=
-AA_PASSWORD=
+
+# Default Outbound Line Alias (used when no line prefix is typed)
+DEFAULT_LINE=personal
+
+# AAISP SMS API Credentials — Line 1
+AA_LINE_1_ALIAS=personal
+AA_LINE_1_NUMBER=
+AA_LINE_1_USERNAME=
+AA_LINE_1_PASSWORD=
+AA_LINE_1_ORIGINATOR=
+
+# AAISP SMS API Credentials — Line 2 (Optional; add AA_LINE_3_*, etc. as needed)
+# AA_LINE_2_ALIAS=work
+# AA_LINE_2_NUMBER=
+# AA_LINE_2_USERNAME=
+# AA_LINE_2_PASSWORD=
+# AA_LINE_2_ORIGINATOR=
+
+# Security Token for the Inbound Webhook
 WEBHOOK_TOKEN=$WEBHOOK_TOKEN
+
+# The XMPP JID that should receive the incoming SMS notifications
 TARGET_USER_JID=
 EOF
 chmod 600 /etc/sms-xmpp-bridge/secrets.env
