@@ -445,7 +445,7 @@ async def test_send_sms_api_success_and_originator_payload():
     # 1. Line without originator omits 'oa'
     await bot.send_sms(PERSONAL_LINE, "+447700900000", "Personal Msg", orig_msg)
     args, kwargs = bot.http_session.post.call_args
-    assert "sms.aa.net.uk/sms.cgi" in args
+    assert "sms.aa.net.uk/sms.cgi" in args[0]
     assert kwargs["data"]["username"] == PERSONAL_LINE.username
     assert kwargs["data"]["password"] == PERSONAL_LINE.password
     assert kwargs["data"]["da"] == "+447700900000"
