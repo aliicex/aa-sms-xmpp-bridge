@@ -7,14 +7,13 @@ from aiohttp.test_utils import make_mocked_request
 
 import src.bot as bot_module
 from src.bot import (
-    AALine,
     MAX_SMS_PER_HOUR,
+    AALine,
     SMSBridgeBot,
     calculate_sms_parts,
     handle_inbound_sms,
     validate_config,
 )
-
 
 PERSONAL_LINE = AALine(
     alias="personal",
