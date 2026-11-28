@@ -7,6 +7,7 @@ This project provides a community script for Proxmox VE. It deploys a lightweigh
 - **Multi-line support:** Configure multiple AAISP VoIP, presentation, or SIP2SIM numbers with short aliases (such as `personal` and `work`). Incoming messages show which line received them, and direct replies automatically send back out through that same line.
 - **Incoming SMS:** Messages are received through a Cloudflare Tunnel, sent to a local webhook at `localhost:8080` and forwarded to your XMPP chat. No firewall ports need to be opened.
 - **Outgoing SMS:** Send messages from XMPP using UK mobile numbers in `07...` or `+447...` format, prefix with a line alias to choose which number sends the text, or reply directly to an incoming message. The bot sends messages through an AAISP HTTP POST request, asks you to confirm with `y` or `n`, and reports any delivery errors in XMPP.
+- **Voice calling & missed-call alerts (optional):** Pair with [proxmox-asterisk-voice](https://github.com) to place UK voice calls from XMPP (`call [alias] <number>`) and receive missed-call alerts with one-word `call` callbacks.
 - **Spending controls:** The bot previews the sending line, destination number, number of SMS parts and estimated cost (about 3.6p per part), warns about Unicode and emoji encoding, converts supported smart punctuation to GSM-7, accepts only UK mobile numbers beginning with `+447`, limits messages to four parts and caps sending at 30 SMS per hour.
 - **Security:** Secrets are stored in a root-only environment file. Webhook tokens are checked in constant time. Presence subscriptions are restricted to `TARGET_USER_JID`, and OMEMO-encrypted stanzas receive a plain-text warning.
 - **Reliability:** The bot uses `asyncio` and handles `SIGTERM` gracefully, disconnecting cleanly when the container is updated.
@@ -15,7 +16,7 @@ This project provides a community script for Proxmox VE. It deploys a lightweigh
 
 Because `cloudflared` runs inside the container, you do not need to open or forward any ports on your router.
 
-1. Sign in to the [Cloudflare Zero Trust Dashboard](https://dash.cloudflare.com) and go to **Networks** > **Tunnels**.
+1. Sign in to the [Cloudflare Zero Trust Dashboard](https://cloudflare.com) and go to **Networks** > **Tunnels**.
 2. Select **Create a tunnel**, choose **Cloudflared** and give the tunnel a name, such as `sms-xmpp-bridge`.
 3. Copy the connector token shown on the installation page. You will enter it when you install the Proxmox script.
 4. Choose the **Published application** route type:
@@ -32,7 +33,7 @@ Do not apply a Cloudflare Access authentication policy to `https://sms.yourdomai
 Run this command in the Proxmox VE host shell:
 
 ```bash
-bash -c "$(curl -fsSL https://raw.githubusercontent.com/aliicex/aa-sms-xmpp-bridge/main/ct/sms-xmpp-bridge.sh)"
+bash -c "\$(curl -fsSL https://githubusercontent.com)"
 ```
 
 During installation:
@@ -64,7 +65,12 @@ Enter the following values. See `.env.example` for the required format.
 - `AA_LINE_1_ORIGINATOR`: Optional presentation number (`oa`) to send from when sharing a single AAISP VoIP login across multiple numbers. Leave blank to use the account default.
 - `AA_LINE_2_*` *(optional)*: Add `AA_LINE_2_ALIAS`, `AA_LINE_2_NUMBER`, `AA_LINE_2_USERNAME`, `AA_LINE_2_PASSWORD`, and `AA_LINE_2_ORIGINATOR` (and `AA_LINE_3_*`, etc.) for additional numbers.
 - `WEBHOOK_TOKEN`: This is populated during installation. Keep the generated value or replace it with a random string.
-- `TARGET_USER_JID`: Your personal XMPP JID. Only this JID can send SMS, subscribe to the bot's presence and receive notifications.
+- `TARGET_USER_JID`: Your personal XMPP JID. Only this JID can send SMS, place calls, subscribe to the bot's presence and receive notifications.
+- `ASTERISK_AMI_HOST` *(optional)*: LAN IP address of your `proxmox-asterisk-voice` LXC container.
+- `ASTERISK_AMI_PORT` *(optional)*: Asterisk Manager Interface port (default `5038`).
+- `ASTERISK_AMI_USERNAME` *(optional)*: Asterisk AMI username (default `smsbridge`).
+- `ASTERISK_AMI_PASSWORD` *(optional)*: Auto-generated `AMI_PASSWORD` from `/etc/asterisk/secrets.env` on your Asterisk LXC.
+- `WEBHOOK_HOST` *(optional)*: HTTP server bind address (default `0.0.0.0` so your Asterisk LXC can send missed-call events to `/call-event` over your LAN).
 
 ### Restart the service and check its status
 
@@ -77,12 +83,12 @@ journalctl -u sms-xmpp-bridge -f
 
 ## 4. Configure the AAISP Control Pages
 
-Sign in to the [AAISP Control Pages](https://control.aa.net.uk/) and open the VoIP settings for each number you configured in `secrets.env`.
+Sign in to the [AAISP Control Pages](https://aa.net.uk) and open the VoIP settings for each number you configured in `secrets.env`.
 
 1. Set the **Inbound SMS Target** to:
 
    ```text
-   https://sms.yourdomain.com/webhook?token=YOUR_WEBHOOK_TOKEN
+   https://yourdomain.com
    ```
 
    Replace `YOUR_WEBHOOK_TOKEN` with the value in `/etc/sms-xmpp-bridge/secrets.env`.
@@ -134,8 +140,19 @@ The bot clears the active session and notifies you if 15 minutes pass without ac
 
 If you receive messages from two different conversations within 15 minutes (even across different lines), direct replies are paused. Specify the line alias and recipient number to send your next message.
 
+### Voice Calling & Missed-Call Alerts (Optional)
+
+When paired with [proxmox-asterisk-voice](https://github.com), you can place outbound UK calls and receive missed-call alerts in the same XMPP chat:
+
+- **Place a call (default line):** `call 07700900000` or `call 02079460000` — rings your XMPP Jingle client (such as Cheogram) and connects you to the UK number via AAISP.
+- **Place a call (specific line):** `call work 07700900000` — places the call presenting your `work` AAISP line.
+- **Sticky callback:** `call` — calls back the most recent SMS sender or missed caller on the line they contacted you on (within 15 minutes).
+- **UK-only safety filter:** Permits UK geographic (`01`, `02`), non-geographic (`03`), and mobile (`07`) numbers while blocking international and `08`/`09` premium-rate numbers.
+- **Missed-call alerts:** Asterisk posts unanswered inbound calls to `POST /call-event?token=<WEBHOOK_TOKEN>`, sending a missed-call alert to XMPP and setting the caller as your active sticky session so you can reply `call` or send an SMS.
+
 **Commands**
 
+- `call [alias] <UK number>`: Place a voice call (or send `call` alone to ring back the active session).
 - `lines`: List all configured phone lines, their numbers and which one is set as the default.
 - `status`: Check whether a direct-reply session is active, which line it uses and how many minutes remain.
 - `help`: See a summary of message formats and commands.
