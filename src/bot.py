@@ -208,11 +208,7 @@ class SMSBridgeBot(ClientXMPP):
                 async with session.post(AA_API_URL, data=params, timeout=15) as resp:
                     body = (await resp.text()).strip()
                     if resp.status == 200 and body.upper().startswith("OK"):
-                        return (
-                            True,
-                            f"Sent via [{pending.line.alias}] to {pending.destination} "
-                            f"({pending.parts} part(s), {pending.cost_pence}p).",
-                        )
+                        return True, f"Sent via [{pending.line.alias}] to {pending.destination} ({pending.parts} part(s), {pending.cost_pence}p)."
                     return False, f"AAISP API error ({resp.status}): {body}"
         except Exception as exc:
             return False, f"Failed to reach AAISP SMS API: {exc}"
@@ -234,7 +230,7 @@ class SMSBridgeBot(ClientXMPP):
 
         # 1. Help & Status commands
         if lower_body in ("help", "?"):
-            line_list = ", ".join(f"{line.alias} ({line.number})" for line in LINES.values()) or "none"
+            line_list = ", ".join(f"{l.alias} ({l.number})" for line in LINES.values()) or "none"
             self.send_reply(
                 sender_bare,
                 "Commands:\n"
@@ -252,8 +248,8 @@ class SMSBridgeBot(ClientXMPP):
                 self.send_reply(sender_bare, "No lines configured in secrets.env.")
                 return
             details = "\n".join(
-                f"• {line.alias}{' (default)' if line.alias == DEFAULT_LINE_ALIAS else ''}: {line.number}"
-                for line in LINES.values()
+                f"• {l.alias}{' (default)' if line.alias == DEFAULT_LINE_ALIAS else ''}: {l.number}"
+                for l in LINES.values()
             )
             self.send_reply(sender_bare, f"Configured lines:\n{details}")
             return
