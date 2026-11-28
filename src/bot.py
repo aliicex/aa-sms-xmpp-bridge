@@ -23,7 +23,7 @@ XMPP_PASSWORD = os.getenv('XMPP_PASSWORD', '').strip()
 WEBHOOK_TOKEN = os.getenv('WEBHOOK_TOKEN', '').strip()
 TARGET_USER_JID = os.getenv("TARGET_USER_JID", "").strip()
 DEFAULT_LINE_ALIAS = os.getenv("DEFAULT_LINE", "").strip().lower()
-AA_API_URL = "https://aa.net.uk"
+AA_API_URL = "https://sms.aa.net.uk/sms.cgi"
 
 ASTERISK_AMI_HOST = os.getenv("ASTERISK_AMI_HOST", "").strip()
 ASTERISK_AMI_PORT = int(os.getenv("ASTERISK_AMI_PORT", "5038"))
