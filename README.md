@@ -70,6 +70,7 @@ Enter the following values. See `.env.example` for the required format.
 - `ASTERISK_AMI_PORT` *(optional)*: Asterisk Manager Interface port (default `5038`).
 - `ASTERISK_AMI_USERNAME` *(optional)*: Asterisk AMI username (default `smsbridge`).
 - `ASTERISK_AMI_PASSWORD` *(optional)*: Auto-generated `AMI_PASSWORD` from `/etc/asterisk/secrets.env` on your Asterisk LXC.
+- `ASTERISK_CALL_ENDPOINT` *(optional)*: Asterisk endpoint channel to ring first on outbound click-to-call (default `PJSIP/mobile`).
 - `WEBHOOK_HOST` *(optional)*: HTTP server bind address (default `0.0.0.0` so your Asterisk LXC can send missed-call events to `/call-event` over your LAN).
 
 ### Restart the service and check its status
@@ -144,7 +145,7 @@ If you receive messages from two different conversations within 15 minutes (even
 
 When paired with [proxmox-asterisk-voice](https://github.com), you can place outbound UK calls and receive missed-call alerts in the same XMPP chat:
 
-- **Place a call (default line):** `call 07700900000` or `call 02079460000` — rings your XMPP Jingle client (such as Cheogram) and connects you to the UK number via AAISP.
+- **Place a call (default line):** `call 07700900000` or `call 02079460000` — rings your encrypted SRTP SIP client (such as Linphone or Baresip) and connects you to the UK number via AAISP.
 - **Place a call (specific line):** `call work 07700900000` — places the call presenting your `work` AAISP line.
 - **Sticky callback:** `call` — calls back the most recent SMS sender or missed caller on the line they contacted you on (within 15 minutes).
 - **UK-only safety filter:** Permits UK geographic (`01`, `02`), non-geographic (`03`), and mobile (`07`) numbers while blocking international and `08`/`09` premium-rate numbers.
