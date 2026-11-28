@@ -270,7 +270,7 @@ async def trigger_asterisk_call(destination_e164: str, line_alias: str) -> tuple
 
         originate_cmd = (
             "Action: Originate\r\n"
-            f"Channel: Motif/xmpp_voice/{TARGET_USER_JID}\r\n"
+            f"Channel: {os.getenv('ASTERISK_CALL_ENDPOINT', 'PJSIP/mobile')}\r\n"
             "Context: outbound-aaisp\r\n"
             f"Exten: {destination_e164}\r\n"
             "Priority: 1\r\n"
@@ -290,7 +290,7 @@ async def trigger_asterisk_call(destination_e164: str, line_alias: str) -> tuple
         await writer.wait_closed()
 
         if b"Response: Success" in orig_resp:
-            return True, f"☎️ Ringing your XMPP client to connect {destination_e164} via {line_alias}..."
+            return True, f"☎️ Ringing your SIP client to connect {destination_e164} via {line_alias}..."
         return False, f"Asterisk rejected call: {orig_resp.decode(errors='ignore').strip()}"
     except Exception as exc:
         return False, f"Could not reach Asterisk AMI ({ASTERISK_AMI_HOST}:{ASTERISK_AMI_PORT}): {exc}"
