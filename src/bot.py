@@ -23,7 +23,13 @@ XMPP_PASSWORD = os.getenv('XMPP_PASSWORD', '').strip()
 WEBHOOK_TOKEN = os.getenv('WEBHOOK_TOKEN', '').strip()
 TARGET_USER_JID = os.getenv("TARGET_USER_JID", "").strip()
 DEFAULT_LINE_ALIAS = os.getenv("DEFAULT_LINE", "").strip().lower()
-AA_API_URL = "https://sms.aa.net.uk/sms.cgi"
+AA_API_URL = "https://aa.net.uk"
+
+ASTERISK_AMI_HOST = os.getenv("ASTERISK_AMI_HOST", "").strip()
+ASTERISK_AMI_PORT = int(os.getenv("ASTERISK_AMI_PORT", "5038"))
+ASTERISK_AMI_USERNAME = os.getenv("ASTERISK_AMI_USERNAME", "smsbridge").strip()
+ASTERISK_AMI_PASSWORD = os.getenv("ASTERISK_AMI_PASSWORD", "").strip()
+WEBHOOK_HOST = os.getenv("WEBHOOK_HOST", "0.0.0.0").strip()
 
 STICKY_TIMEOUT_SECONDS = 15 * 60  # 15 minutes
 CONFIRM_TIMEOUT_SECONDS = 60      # 60 seconds to confirm outbound SMS
@@ -43,6 +49,8 @@ logger = logging.getLogger("SMSBridge")
 
 # UK mobile numbers in E.164 format (+447 followed by 9 digits)
 UK_E164_MOBILE_RE = re.compile(r"^\+447\d{9}$")
+# UK landline, non-geographic (01/02/03), and mobile (07) numbers in E.164 format
+UK_E164_CALL_RE = re.compile(r"^\+44[1237]\d{8,9}$")
 LINE_ALIAS_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,19}$")
 
 # Matches optional line alias prefix: "<alias> <rest>", "<alias>: <rest>", or "<alias>|<rest>"
@@ -148,7 +156,6 @@ def calculate_sms_parts(text: str) -> tuple[int, bool]:
 def strip_number_chars(raw_number: str) -> str:
     return re.sub(r"[\s\-]", "", raw_number).strip()
 
-
 def normalize_uk_any_number(raw_number: str) -> str:
     """Normalizes any UK number (01/02/03/07/08) to +44... for inbound line matching."""
     cleaned = strip_number_chars(raw_number)
@@ -199,6 +206,95 @@ def normalize_uk_number(raw_number: str) -> tuple[str | None, str | None]:
     return normalized, None
 
 
+def normalize_uk_call_number(raw_number: str) -> tuple[str | None, str | None]:
+    """
+    Normalizes UK numbers (01, 02, 03, 07) to +44 E.164 for outbound voice calls.
+    Blocks international numbers and 08/09 premium/service numbers.
+    """
+    cleaned = strip_number_chars(raw_number)
+
+    if cleaned.startswith("+") and not cleaned.startswith("+44"):
+        return None, "Only UK numbers supported."
+    if cleaned.startswith("00") and not cleaned.startswith("0044"):
+        return None, "Only UK numbers supported."
+
+    if cleaned.startswith("0044"):
+        normalized = "+44" + cleaned[4:]
+    elif cleaned.startswith("+44"):
+        normalized = cleaned
+    elif cleaned.startswith("0"):
+        normalized = "+44" + cleaned[1:]
+    elif cleaned.startswith(("1", "2", "3", "7")) and len(cleaned) in (9, 10):
+        normalized = "+44" + cleaned
+    else:
+        return None, (
+            f"Invalid UK number '{cleaned}'. "
+            f"Use a standard UK landline or mobile number (01, 02, 03, or 07)."
+        )
+
+    if not UK_E164_CALL_RE.match(normalized):
+        return None, (
+            f"Blocked or invalid UK number '{cleaned}'. "
+            f"Only standard UK numbers (01, 02, 03, 07) are permitted."
+        )
+
+    return normalized, None
+
+
+async def trigger_asterisk_call(destination_e164: str, line_alias: str) -> tuple[bool, str]:
+    """Authenticate to Asterisk AMI and originate a Jingle call to the user, bridging to AAISP."""
+    if not (ASTERISK_AMI_HOST and ASTERISK_AMI_PASSWORD):
+        return False, "Asterisk AMI is not configured in secrets.env."
+
+    try:
+        reader, writer = await asyncio.wait_for(
+            asyncio.open_connection(ASTERISK_AMI_HOST, ASTERISK_AMI_PORT),
+            timeout=5.0,
+        )
+        await asyncio.wait_for(reader.readline(), timeout=3.0)
+
+        login_cmd = (
+            "Action: Login\r\n"
+            f"Username: {ASTERISK_AMI_USERNAME}\r\n"
+            f"Secret: {ASTERISK_AMI_PASSWORD}\r\n"
+            "Events: off\r\n\r\n"
+        )
+        writer.write(login_cmd.encode("utf-8"))
+        await writer.drain()
+
+        login_resp = await asyncio.wait_for(reader.readuntil(b"\r\n\r\n"), timeout=3.0)
+        if b"Response: Success" not in login_resp:
+            writer.close()
+            await writer.wait_closed()
+            return False, "Asterisk AMI authentication failed."
+
+        originate_cmd = (
+            "Action: Originate\r\n"
+            f"Channel: Motif/xmpp_voice/{TARGET_USER_JID}\r\n"
+            "Context: outbound-aaisp\r\n"
+            f"Exten: {destination_e164}\r\n"
+            "Priority: 1\r\n"
+            f"CallerID: {destination_e164}\r\n"
+            f"Variable: CALL_LINE={line_alias}\r\n"
+            "Timeout: 30000\r\n"
+            "Async: true\r\n\r\n"
+        )
+        writer.write(originate_cmd.encode("utf-8"))
+        await writer.drain()
+
+        orig_resp = await asyncio.wait_for(reader.readuntil(b"\r\n\r\n"), timeout=3.0)
+
+        writer.write(b"Action: Logoff\r\n\r\n")
+        await writer.drain()
+        writer.close()
+        await writer.wait_closed()
+
+        if b"Response: Success" in orig_resp:
+            return True, f"☎️ Ringing your XMPP client to connect {destination_e164} via {line_alias}..."
+        return False, f"Asterisk rejected call: {orig_resp.decode(errors='ignore').strip()}"
+    except Exception as exc:
+        return False, f"Could not reach Asterisk AMI ({ASTERISK_AMI_HOST}:{ASTERISK_AMI_PORT}): {exc}"
+
 def parse_outbound_message(body: str) -> tuple[AALine | None, str | None, str, str | None]:
     """
     Parses an outbound XMPP command into:
@@ -241,6 +337,7 @@ def parse_outbound_message(body: str) -> tuple[AALine | None, str | None, str, s
 
     return None, None, working, None
 
+
 def validate_config():
     global DEFAULT_LINE
 
@@ -268,7 +365,7 @@ def validate_config():
         if (match := re.match(r"^AA_LINE_(\d+)_(?:ALIAS|NUMBER|USERNAME|PASSWORD)$", key))
     })
 
-    reserved_words = {"help", "status", "lines", "y", "yes", "n", "no", "cancel"}
+    reserved_words = {"help", "status", "lines", "call", "y", "yes", "n", "no", "cancel"}
 
     for idx in line_indices:
         prefix = f"AA_LINE_{idx}_"
@@ -333,7 +430,6 @@ def validate_config():
         f"Loaded {len(LINES_BY_ALIAS)} AAISP line(s): {', '.join(LINES_BY_ALIAS.keys())} "
         f"(default: {DEFAULT_LINE.alias})"
     )
-
 
 class SMSBridgeBot(ClientXMPP):
     def __init__(self, jid, password):
@@ -574,6 +670,7 @@ class SMSBridgeBot(ClientXMPP):
                 f"• Default line ({DEFAULT_LINE.alias}): 07700900000 Hello! (or +447700900000: Hello!)\n"
                 "• Specific line: <alias> 07700900000 Hello!\n"
                 "• Sticky reply: Just type your message within 15m of an incoming text (uses its line)\n"
+                "• Outbound call: call [alias] <UK number> (or 'call' to ring back active session)\n"
                 "• Confirm / Cancel: Reply y or n within 60s\n"
                 "• List lines: lines | Check session: status"
             ).send()
@@ -608,6 +705,48 @@ class SMSBridgeBot(ClientXMPP):
                     f"⚠️ Multiple recent sessions ({summary}). "
                     f"Sticky reply is paused; specify a recipient number."
                 ).send()
+            return
+
+        if lower_body == "call" or lower_body.startswith("call "):
+            self._clear_pending_sms()
+            parts = body.split()
+            chosen_line = DEFAULT_LINE
+            raw_target: str | None = None
+
+            if len(parts) == 1:
+                active = self._prune_recent_sessions()
+                if len(active) == 0:
+                    msg.reply(
+                        "No active conversation to call back. "
+                        f"Use: call <UK number> or call {DEFAULT_LINE.alias} <UK number>."
+                    ).send()
+                    return
+                if len(active) > 1:
+                    last_sess = list(active.values())[-1]
+                    sessions_list = ", ".join(
+                        f"{s.sender_number} (via {s.line_alias})" for s in active.values()
+                    )
+                    msg.reply(
+                        f"⚠️ Multiple recent sessions ({sessions_list}).\n"
+                        f"Specify the line and number: call {last_sess.line_alias} {last_sess.sender_number}"
+                    ).send()
+                    return
+                sole_session = next(iter(active.values()))
+                raw_target = sole_session.sender_number
+                chosen_line = LINES_BY_ALIAS[sole_session.line_alias]
+            elif len(parts) >= 3 and parts[1].lower() in LINES_BY_ALIAS:
+                chosen_line = LINES_BY_ALIAS[parts[1].lower()]
+                raw_target = "".join(parts[2:])
+            else:
+                raw_target = "".join(parts[1:])
+
+            target, err = normalize_uk_call_number(raw_target)
+            if err or not target:
+                msg.reply(err or "Invalid UK number.").send()
+                return
+
+            task = asyncio.create_task(self.place_call(chosen_line, target, msg))
+            task.add_done_callback(self._log_task_exception)
             return
 
         # 1. Check if the user is confirming or cancelling a pending SMS
@@ -774,7 +913,6 @@ class SMSBridgeBot(ClientXMPP):
         try:
             async with self.http_session.post(AA_API_URL, data=payload, timeout=15) as resp:
                 resp_text = (await resp.text()).strip()
-                # AAISP returns HTTP 200 even on API errors, prefixing body with "ERR:"
                 if resp.status == 200 and not resp_text.upper().startswith("ERR"):
                     success = True
                     logger.info(f"Outbound SMS dispatched successfully via line '{line.alias}'")
@@ -795,6 +933,42 @@ class SMSBridgeBot(ClientXMPP):
                     sent=success,
                 )
 
+    async def place_call(self, line: AALine, number: str, orig_msg):
+        ok, status_msg = await trigger_asterisk_call(number, line.alias)
+        if ok:
+            active = self._prune_recent_sessions()
+            active[(line.alias, number)] = ActiveSession(
+                line_alias=line.alias,
+                sender_number=number,
+                updated_at=time.monotonic(),
+            )
+            self._schedule_sticky_expiry()
+        orig_msg.reply(status_msg).send()
+
+    def record_missed_call_session(
+        self,
+        caller: str,
+        line_alias: str,
+    ) -> tuple[bool, list[ActiveSession], str, AALine | None]:
+        normalized_caller, err = normalize_uk_call_number(caller)
+        display_caller = (
+            normalized_caller if not err and normalized_caller else strip_number_chars(caller)
+        )
+        matched_line = LINES_BY_ALIAS.get(line_alias.lower()) if line_alias else None
+
+        if err or not normalized_caller or matched_line is None:
+            active = self._prune_recent_sessions()
+            return len(active) > 1, list(active.values()), display_caller, matched_line
+
+        active = self._prune_recent_sessions()
+        active[(matched_line.alias, normalized_caller)] = ActiveSession(
+            line_alias=matched_line.alias,
+            sender_number=normalized_caller,
+            updated_at=time.monotonic(),
+        )
+        self._schedule_sticky_expiry()
+        sessions = list(active.values())
+        return len(sessions) > 1, sessions, display_caller, matched_line
 
 async def handle_inbound_sms(request: web.Request) -> web.Response:
     token = request.query.get("token", "")
@@ -878,6 +1052,79 @@ async def handle_inbound_sms(request: web.Request) -> web.Response:
     return web.Response(text="OK")
 
 
+async def handle_call_event(request: web.Request) -> web.Response:
+    token = request.query.get("token", "")
+    if not WEBHOOK_TOKEN or not hmac.compare_digest(token, WEBHOOK_TOKEN):
+        logger.warning("Rejected unauthorized call-event webhook request")
+        return web.Response(status=403, text="Forbidden")
+
+    if request.content_type not in {
+        "application/x-www-form-urlencoded",
+        "multipart/form-data",
+    }:
+        return web.Response(status=415, text="Unsupported Media Type")
+
+    try:
+        data = await request.post()
+    except (ValueError, web.HTTPBadRequest):
+        return web.Response(status=400, text="Invalid form data")
+
+    caller = data.get("caller")
+    line_alias = data.get("line", "")
+    cause = data.get("cause", "")
+
+    if not isinstance(caller, str) or not caller.strip():
+        return web.Response(status=400, text="Missing caller field")
+
+    caller = caller.strip()
+    line_alias = line_alias.strip().lower() if isinstance(line_alias, str) else ""
+    cause = cause.strip() if isinstance(cause, str) else ""
+
+    if len(caller) > 64 or len(line_alias) > 32 or len(cause) > 64:
+        return web.Response(status=400, text="Field too long")
+
+    bot: SMSBridgeBot = request.app["bot"]
+    is_collision, active_sessions, display_caller, matched_line = bot.record_missed_call_session(
+        caller, line_alias
+    )
+
+    line_header = f" [{matched_line.alias}]" if matched_line else (f" [{line_alias}]" if line_alias else "")
+    cause_note = f" ({cause})" if cause else ""
+
+    if matched_line is None:
+        reply_hint = (
+            f"Reply 'call {DEFAULT_LINE.alias} {display_caller}' to ring back."
+        )
+    elif is_collision:
+        sessions_list = ", ".join(
+            f"{s.sender_number} via {s.line_alias}" for s in active_sessions
+        )
+        reply_hint = (
+            f"⚠️ Multiple active sessions ({sessions_list}).\n"
+            f"Reply 'call {matched_line.alias} {display_caller}' to ring back."
+        )
+    elif UK_E164_MOBILE_RE.match(display_caller):
+        reply_hint = (
+            f"💬 Reply 'call' to ring back via {matched_line.alias}, or type a message to SMS (active 15m)."
+        )
+    else:
+        reply_hint = (
+            f"☎️ Reply 'call' to ring back via {matched_line.alias} (active 15m)."
+        )
+
+    formatted_msg = (
+        f"📵 Missed Call{line_header}{cause_note}\n"
+        f"From: {display_caller}\n\n"
+        f"{reply_hint}"
+    )
+
+    bot.send_message(mto=TARGET_USER_JID, mbody=formatted_msg, mtype="chat")
+    logger.info(
+        f"Forwarded missed call alert to XMPP (from={caller}, line={line_alias or 'none'}, cause={cause or 'none'})"
+    )
+    return web.Response(text="OK")
+
+
 async def main():
     validate_config()
 
@@ -893,12 +1140,13 @@ async def main():
         app = web.Application(client_max_size=16 * 1024)
         app['bot'] = bot
         app.router.add_post('/webhook', handle_inbound_sms)
+        app.router.add_post('/call-event', handle_call_event)
 
         runner = web.AppRunner(app)
         await runner.setup()
-        site = web.TCPSite(runner, '127.0.0.1', 8080)
+        site = web.TCPSite(runner, WEBHOOK_HOST, 8080)
         await site.start()
-        logger.info("HTTP Webhook server started on port 8080")
+        logger.info(f"HTTP Webhook server started on {WEBHOOK_HOST}:8080")
 
         bot.connect()
         await bot.disconnected
