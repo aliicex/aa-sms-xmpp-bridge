@@ -7,8 +7,8 @@ from aiohttp.test_utils import make_mocked_request
 
 import src.bot as bot_module
 from src.bot import (
-    MAX_SMS_PER_HOUR,
     AALine,
+    MAX_SMS_PER_HOUR,
     SMSBridgeBot,
     calculate_sms_parts,
     handle_inbound_sms,
